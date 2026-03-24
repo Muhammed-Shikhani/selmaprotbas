@@ -93,7 +93,7 @@
       real(rk) :: nb,deltao,nue,sigma_b,dn,dn_sed
       real(rk) :: q10_rec,ade_r0,alphaade,q10_recs,mbsrate,mbnnrate,den_frac_denanmx,den_frac_denanmx_sed
       real(rk) :: sedrate,erorate,sedratepo4,eroratepo4,po4ret,nitrif_rate
-      real(rk) :: fl_burialrate,pburialrate,pliberationrate,ipo4th,br0,fds,pvel,tau_crit
+      real(rk) :: fl_burialrate,pburialrate,pliberationrate,ipo4th,br0,fds,pvel,tau_crit, altitude
       integer  :: newflux
       character(len=16) :: env_type, mbn_stoi ! env_type is identifier for setting the environment to "marine" or "fresh" (fresh disables mineralization with sulphate)
       logical  :: diagnostics
@@ -138,6 +138,7 @@ end function gradual_switch
    real(rk) :: wdz,wpo4,kc
    
    call self%get_parameter(self%env_type, 'env_type', 'Define environment type, either fresh or marine', default='marine') 
+   call self%get_parameter(self%altitude, 'altitude', 'm.a.s.l.', 'altitude in meters above sea level', default=0.0_rk)
    call self%get_parameter(wdz, 'wdz', 'm/d', 'vertical velocity of detritus (positive: upwards/floating, negative: downwards/sinking)', default=-4.5_rk)
    call self%get_parameter(wpo4, 'wpo4', 'm/d', 'vertical velocity of suspended P-Fe (positive: upwards/floating, negative: downwards/sinking)', default=-1.0_rk)
    call self%get_parameter(self%dn, 'dn', '1/d', 'detritus mineralization rate', default=0.003_rk, scale_factor=1.0_rk/secs_per_day)
@@ -511,11 +512,13 @@ end function gradual_switch
   real(rk),parameter       :: kelvin=273.16_rk
   real(rk),parameter       :: mol_per_liter=44.661_rk
 
+
+
 !EOP
 !-----------------------------------------------------------------------
 !BOC
    tk=(t+kelvin)*0.01_rk
-   osat_weiss=exp(aa1+aa2/tk+a3*log(tk)+a4*tk+s*(b1+(b2+b3*tk)*tk))*mol_per_liter
+   osat_weiss=  exp(aa1+aa2/tk+a3*log(tk)+a4*tk+s*(b1+(b2+b3*tk)*tk))*mol_per_liter
    end function osat_weiss
 !EOC
 !-----------------------------------------------------------------------
@@ -540,6 +543,10 @@ end function gradual_switch
 ! !LOCAL VARIABLES:
   real(rk)                 :: p_vel,sc,flo2,osat,schmidt
   real(rk),parameter       :: o2_molar_mass =  31.9988_rk ! molar mass of O2
+  real(rk),parameter       :: p1=1012_rk
+  real(rk),parameter       :: p2=1013_rk
+  real(rk),parameter       :: f=0.12_rk
+  real(rk)                 :: alt_corr
 !  integer,parameter        :: newflux=2
 !
 !EOP
@@ -603,8 +610,28 @@ end function gradual_switch
       ! Seawater only
 	  flo2 = self%pvel * (31.25_rk * (14.603_rk - 0.40215_rk * temp) - o2)
       _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)
+   elseif (self%newflux .eq. 5) then
+      ! Use Weiss formula for oxygen saturation
+      ! the altitude correction is inhereited from the correction term used in Marelac R package for oxygen saturation based on "paul" method
+      ! the "paul" method is based on Paul L, 1985. Das thermische Regime der Talsperre Saidenbach und einige Beziehungen zwischen abiotischen und biotischen Komponenten. 
+      !Dissertation, TU Dresden, Fakult?t Bau-, Wasser- und Forstwesen. 84 pp.
+     alt_corr=  ( p1 - f*self%altitude)/p2
+	  osat = alt_corr* osat_weiss(temp,salt)
+	  
+	  ! Schmidt number for O2 based on Wanninkhof (1992, Journ. of Geophys. Res.) differs between fresh- and seawater
+	  if (self%env_type .eq. "fresh") then
+         schmidt = 1800.6_rk - 120.1_rk * temp + 3.7818_rk * temp**2_rk + 0.047608_rk * temp**3_rk
+      else
+         schmidt = 1953.4_rk - 128.0_rk * temp + 3.9918_rk * temp**2_rk + 0.050091_rk * temp**3_rk
+      end if
+	  
+	  ! Exchange based on Cole & Caroco (1998, L&O) following Staehr et al. (2010, L&O Methods)
+	  p_vel = ((2.07_rk + 0.215_rk * wnd**1.7_rk) / 100_rk * (schmidt/600.0_rk)**(-0.5_rk)) ! in m/h
+	  p_vel = p_vel / secs_per_hour
+	  flo2 = p_vel * (osat - o2)
+	  _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)   
    else
-	  print *, 'ERROR: Invalid option for newflux, should be 1,2,3, or 4'
+	  print *, 'ERROR: Invalid option for newflux, should be 1,2,3,4 or 5'
 	  stop
    end if
 
