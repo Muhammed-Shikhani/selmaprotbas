@@ -56,6 +56,7 @@
       type (type_dependency_id) :: id_temp
       type (type_horizontal_dependency_id) :: id_taub
       type (type_diagnostic_variable_id) :: id_chla
+      type (type_diagnostic_variable_id) :: id_phyto_c
       type (type_diagnostic_variable_id) :: id_GPP, id_NPP, id_Nfix
       type (type_diagnostic_variable_id) :: n_lim, p_lim, si_lim, light_lim, r0_after_temp
 	  
@@ -208,6 +209,7 @@
    call self%add_to_aggregate_variable(standard_variables%total_silicate, self%id_c, self%rfs)
    call self%add_to_aggregate_variable(standard_variables%attenuation_coefficient_of_photosynthetic_radiative_flux, self%id_c, scale_factor=kc, include_background=.true.)
 
+   call self%register_diagnostic_variable(self%id_phyto_c, 'id_phyto_c','mmol C/m3', 'phytoplankton biomass carbon concentration')
    call self%register_diagnostic_variable(self%id_chla, 'chla','mg chl a/m3', 'chlorophyll concentration')
    call self%register_diagnostic_variable(self%id_GPP,  'GPP', 'mmol/m3/d',   'gross primary production')
    call self%register_diagnostic_variable(self%id_NPP,  'NPP', 'mmol/m3/d',   'net primary production')
@@ -224,8 +226,9 @@
    end if
 
 !  we create an aggregate variable for chlA
+   call self%add_to_aggregate_variable(type_bulk_standard_variable(name='total_phytoplankton_c',units="mmol C/m3",aggregate_variable=.true.),self%id_phyto_c,scale_factor=1._rk)
    call self%add_to_aggregate_variable(type_bulk_standard_variable(name='total_chlorophyll',units="mg/m3",aggregate_variable=.true.),self%id_chla,scale_factor=1._rk)
-   
+
    end subroutine initialize
 !EOC
 
@@ -381,6 +384,7 @@
       if (_AVAILABLE_(self%id_dic)) _SET_ODE_(self%id_dic, lpn * c - r * cg)
 
       _SET_DIAGNOSTIC_(self%id_chla, c/self%Yc) ! old comment before making script N-based: relation between carbon and nitrogen from Hecky et al 1993. The stoichiometry of carbon, nitrogen, and phosphorus in particulate matter of lakes and oceans. Limnology and Oceanography, 38: 709-724.
+      _SET_DIAGNOSTIC_(self%id_phyto_c, c) 
       _SET_DIAGNOSTIC_(self%id_GPP, secs_per_day * r * cg)
       _SET_DIAGNOSTIC_(self%id_NPP, secs_per_day *(r * cg - lpn * c))
       if (self%nitrogen_fixation) then
