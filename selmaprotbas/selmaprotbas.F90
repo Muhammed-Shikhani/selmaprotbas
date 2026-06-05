@@ -85,7 +85,7 @@
       type (type_state_variable_id)        :: id_dd_c,id_dd_p,id_dd_n,id_dd_si,id_aa,id_nn,id_po,id_o2,id_pw,id_dic,id_si
       type (type_bottom_state_variable_id) :: id_fl_c,id_fl_p,id_fl_n,id_fl_si,id_pb
       type (type_dependency_id)            :: id_temp,id_salt
-      type (type_horizontal_dependency_id) :: id_taub,id_wind
+      type (type_horizontal_dependency_id) :: id_taub,id_wind, id_psicomo, id_ppao
       type (type_diagnostic_variable_id)   :: id_DNP,id_ANMP,id_NO3_mg,id_NH4_mg,id_PO4_mg,id_O2_mg,id_H2S_mg,id_Si_mg,id_dd_C2P,id_dd_N2P
       type (type_horizontal_diagnostic_variable_id) :: id_DNB,id_ANMB,id_SBR,id_PBR,id_OFL,id_NBR,id_fln_MBO,id_fln_MBN,id_fln_MBS,id_fluf_C2P, id_fluf_N2P
 
@@ -105,6 +105,10 @@
    end type
 !EOP
 !-----------------------------------------------------------------------
+! iHAMOCC constants for newflux=6
+  real(rk), parameter :: ato2_selma    = 196800._rk  ! atmospheric O2 in PPM
+  real(rk), parameter :: atm2pa_selma  = 101325._rk  ! 1 atm in Pascal
+  real(rk), parameter :: Xconvxa_selma = 6.97e-7_rk  ! gas transfer velocity scaling (m/s per (m/s)^2)
 
    CONTAINS
 
@@ -120,6 +124,8 @@ pure function gradual_switch(x, c1) result(s)
   real(rk) :: s
   s = x * x / (c1 + x * x)
 end function gradual_switch
+
+
 
 !BOP
 !
@@ -241,6 +247,11 @@ end function gradual_switch
    call self%register_dependency(self%id_salt, standard_variables%practical_salinity)
    call self%register_dependency(self%id_wind, standard_variables%wind_speed)
    call self%register_dependency(self%id_taub, standard_variables%bottom_stress)
+   if (self%newflux .eq. 6) then
+     ! call self%register_dependency(self%id_psicomo, standard_variables%ice_area_fraction) commented out becasue the model crashed due to absence of ice fraction area from gotm
+      call self%register_dependency(self%id_ppao,    standard_variables%surface_air_pressure)
+   end if
+
 
    END subroutine initialize
 !EOC
@@ -541,7 +552,7 @@ end function gradual_switch
   real(rk),parameter :: secs_per_hour = 3600._rk
 !
 ! !LOCAL VARIABLES:
-  real(rk)                 :: p_vel,sc,flo2,osat,schmidt
+  real(rk)                 :: p_vel,sc,flo2,osat,schmidt, psicomo, ppao, kwo2, rpp0, t2, t3, t4 
   real(rk),parameter       :: o2_molar_mass =  31.9988_rk ! molar mass of O2
   real(rk),parameter       :: p1=1012_rk
   real(rk),parameter       :: p2=1013_rk
@@ -558,6 +569,8 @@ end function gradual_switch
    _GET_(self%id_temp,temp)
    _GET_(self%id_salt,salt)
    _GET_HORIZONTAL_(self%id_wind,wnd)
+  
+
 
    _GET_(self%id_o2,o2)
 
@@ -630,8 +643,43 @@ end function gradual_switch
 	  p_vel = p_vel / secs_per_hour
 	  flo2 = p_vel * (osat - o2)
 	  _SET_SURFACE_EXCHANGE_(self%id_o2,flo2)   
+   elseif (self%newflux .eq. 6) then
+      ! Use Weiss formula for oxygen saturation
+      ! iHAMOCC-style flux: Wanninkhof (2014) Schmidt number, Weiss (1970) saturation same as Selma,
+      ! with ice fraction and surface air pressure correction.
+      ! Saturation uses SELMA's existing osat_weiss (returns mmol O2/m3 — no unit conversion needed).
+
+     ! _GET_HORIZONTAL_(self%id_psicomo, psicomo)  ! sea-ice area fraction (0-1) commented out since the model did not work due to abscent ice fraction area
+      _GET_HORIZONTAL_(self%id_ppao,    ppao)      ! surface air pressure in Pascal
+
+      t2 = temp**2.0_rk
+      t3 = temp**3.0_rk
+      t4 = temp**4.0_rk
+      schmidt = 1920.4_rk   &
+              - 135.6_rk  * temp &
+              +   5.2122_rk * t2 &
+              -   0.10939_rk * t3 &
+              +   0.00093777_rk * t4
+
+      ! O2 saturation via existing SELMA Weiss function (mmol O2/m3)
+      osat = osat_weiss(temp, salt)
+
+      ! Gas transfer velocity: reduced by ice cover, wind-driven, Schmidt-number corrected
+      !kwo2 = (1.0_rk - psicomo) * Xconvxa_selma * wnd**2.0_rk * (660.0_rk / schmidt)**0.5_rk this did not work becasue the pscicomo does not work since gotm does not prove that 
+      kwo2 = Xconvxa_selma * wnd**2.0_rk * (660.0_rk / schmidt)**0.5_rk
+
+      ! Pressure correction: actual pressure relative to standard atmosphere
+      rpp0 = ppao / atm2pa_selma
+
+      ! Air-sea flux (mmol O2/m2/s)
+      ! Sign: positive = into water (SELMA convention)
+      ! iHAMOCC convention is opposite (positive = out of water), hence the negation
+      flo2 = -kwo2 * (o2 - osat * rpp0)
+
+      _SET_SURFACE_EXCHANGE_(self%id_o2, flo2)
+
    else
-	  print *, 'ERROR: Invalid option for newflux, should be 1,2,3,4 or 5'
+	  print *, 'ERROR: Invalid option for newflux, should be 1,2,3,4,5 or 6'
 	  stop
    end if
 
